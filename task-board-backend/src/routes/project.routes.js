@@ -185,6 +185,44 @@ router.post("/:id/admins", authMiddleware, async (req, res) => {
   }
 });
 
+// DELETE /api/projects/:id/admins/:userId (retirer un admin - seulement owner)
+router.delete("/:id/admins/:userId", authMiddleware, async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+
+    const project = await Project.findById(id);
+
+    if (!project) {
+      return res.status(404).json({ message: "Projet introuvable" });
+    }
+
+    // Vérifier que l'utilisateur est le propriétaire
+    if (project.owner.toString() !== req.userId) {
+      return res.status(403).json({ message: "Seul le propriétaire peut retirer des admins" });
+    }
+
+    // Ne pas retirer le propriétaire
+    if (userId === project.owner.toString()) {
+      return res.status(400).json({ message: "Impossible de retirer le propriétaire" });
+    }
+
+    // Retirer des admins
+    project.admins = project.admins.filter((admin) => admin.toString() !== userId);
+
+    await project.save();
+
+    const updatedProject = await Project.findById(project._id)
+      .populate("owner", "firstName lastName email")
+      .populate("admins", "firstName lastName email")
+      .populate("teamMembers", "firstName lastName email");
+
+    res.json({ message: "Admin retiré", project: updatedProject });
+  } catch (error) {
+    console.error("Erreur retrait admin:", error);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+});
+
 // POST /api/projects/:id/members (ajouter un membre - owner ou admin)
 router.post("/:id/members", authMiddleware, async (req, res) => {
   try {
@@ -224,6 +262,48 @@ router.post("/:id/members", authMiddleware, async (req, res) => {
     res.json({ message: "Membre ajouté", project: updatedProject });
   } catch (error) {
     console.error("Erreur ajout membre:", error);
+    res.status(500).json({ message: "Erreur serveur" });
+  }
+});
+
+// DELETE /api/projects/:id/members/:userId (retirer un membre - owner ou admin)
+router.delete("/:id/members/:userId", authMiddleware, async (req, res) => {
+  try {
+    const { id, userId } = req.params;
+
+    const project = await Project.findById(id);
+
+    if (!project) {
+      return res.status(404).json({ message: "Projet introuvable" });
+    }
+
+    // Vérifier que l'utilisateur est owner ou admin
+    const isOwner = project.owner.toString() === req.userId;
+    const isAdmin = project.admins.some((admin) => admin.toString() === req.userId);
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: "Seuls le propriétaire et les admins peuvent retirer des membres" });
+    }
+
+    // Ne pas retirer le propriétaire
+    if (userId === project.owner.toString()) {
+      return res.status(400).json({ message: "Impossible de retirer le propriétaire du projet" });
+    }
+
+    // Retirer des admins ET des membres
+    project.admins = project.admins.filter((admin) => admin.toString() !== userId);
+    project.teamMembers = project.teamMembers.filter((member) => member.toString() !== userId);
+
+    await project.save();
+
+    const updatedProject = await Project.findById(project._id)
+      .populate("owner", "firstName lastName email")
+      .populate("admins", "firstName lastName email")
+      .populate("teamMembers", "firstName lastName email");
+
+    res.json({ message: "Membre retiré", project: updatedProject });
+  } catch (error) {
+    console.error("Erreur retrait membre:", error);
     res.status(500).json({ message: "Erreur serveur" });
   }
 });

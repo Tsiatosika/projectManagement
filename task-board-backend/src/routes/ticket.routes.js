@@ -20,7 +20,6 @@ const checkProjectMember = async (req, res, next) => {
       return res.status(404).json({ message: "Projet introuvable" });
     }
 
-    // Vérifier que l'utilisateur est membre
     const isMember =
       project.owner.toString() === req.userId ||
       project.admins.some((admin) => admin.toString() === req.userId) ||
@@ -43,7 +42,6 @@ router.get("/project/:projectId", authMiddleware, async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    // Vérifier que l'utilisateur est membre du projet
     const project = await Project.findById(projectId);
 
     if (!project) {
@@ -62,6 +60,7 @@ router.get("/project/:projectId", authMiddleware, async (req, res) => {
     const tickets = await Ticket.find({ project: projectId })
       .populate("assignees", "firstName lastName email")
       .populate("createdBy", "firstName lastName email")
+      .populate("project", "title")
       .sort({ createdAt: -1 });
 
     res.json(tickets);
@@ -83,7 +82,6 @@ router.get("/:id", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Ticket introuvable" });
     }
 
-    // Vérifier que l'utilisateur est membre du projet
     const project = await Project.findById(ticket.project._id);
     const isMember =
       project.owner.toString() === req.userId ||
@@ -121,7 +119,8 @@ router.post("/", authMiddleware, checkProjectMember, async (req, res) => {
 
     const populatedTicket = await Ticket.findById(ticket._id)
       .populate("assignees", "firstName lastName email")
-      .populate("createdBy", "firstName lastName email");
+      .populate("createdBy", "firstName lastName email")
+      .populate("project", "title");
 
     res.status(201).json({ message: "Ticket créé", ticket: populatedTicket });
   } catch (error) {
@@ -141,7 +140,6 @@ router.patch("/:id", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Ticket introuvable" });
     }
 
-    // Vérifier que l'utilisateur est membre du projet
     const project = await Project.findById(ticket.project);
     const isMember =
       project.owner.toString() === req.userId ||
@@ -157,13 +155,14 @@ router.patch("/:id", authMiddleware, async (req, res) => {
     if (description !== undefined) ticket.description = description;
     if (status) ticket.status = status;
     if (estimationDate) ticket.estimationDate = estimationDate;
-    if (assignees) ticket.assignees = assignees;
+    if (assignees !== undefined) ticket.assignees = assignees; // ← Important pour les assignés
 
     await ticket.save();
 
     const updatedTicket = await Ticket.findById(ticket._id)
       .populate("assignees", "firstName lastName email")
-      .populate("createdBy", "firstName lastName email");
+      .populate("createdBy", "firstName lastName email")
+      .populate("project", "title");
 
     res.json({ message: "Ticket mis à jour", ticket: updatedTicket });
   } catch (error) {
@@ -181,7 +180,6 @@ router.delete("/:id", authMiddleware, async (req, res) => {
       return res.status(404).json({ message: "Ticket introuvable" });
     }
 
-    // Vérifier que l'utilisateur est le créateur
     if (ticket.createdBy.toString() !== req.userId) {
       return res.status(403).json({ message: "Seul le créateur peut supprimer ce ticket" });
     }

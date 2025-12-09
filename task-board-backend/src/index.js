@@ -6,6 +6,7 @@ const authRoutes = require("./routes/auth.routes");
 const projectRoutes = require("./routes/project.routes");
 const ticketRoutes = require("./routes/ticket.routes");
 const commentRoutes = require("./routes/comment.routes");
+const userRoutes = require('./routes/user.routes');
 
 
 const app = express();
@@ -33,3 +34,4 @@ app.use("/api/auth", authRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/comments", commentRoutes);
+app.use('/api/users', userRoutes);
