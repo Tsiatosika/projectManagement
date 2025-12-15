@@ -1,195 +1,256 @@
-const express = require("express");
-const Ticket = require("../models/Ticket");
-const Project = require("../models/Project");
-const authMiddleware = require("../middlewares/auth.middleware");
-
+const express = require('express');
 const router = express.Router();
+const Ticket = require('../models/Ticket');
+const Project = require('../models/Project');
+const authMiddleware = require('../middlewares/auth.middleware');
 
-// Middleware pour vérifier si l'utilisateur est membre du projet
-const checkProjectMember = async (req, res, next) => {
+// Toutes les routes nécessitent une authentification
+router.use(authMiddleware);
+
+// Créer un ticket
+router.post('/', async (req, res) => {
   try {
-    const projectId = req.body.project || req.projectId;
+    const { title, description, estimationDate, projectId, assignees, labels } = req.body;
+    const userId = req.userId;
 
-    if (!projectId) {
-      return res.status(400).json({ message: "project requis" });
+    console.log('Create ticket request:', { title, projectId, userId });
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
     }
 
+    // Vérifier que le projet existe et que l'utilisateur y a accès
     const project = await Project.findById(projectId);
-
     if (!project) {
-      return res.status(404).json({ message: "Projet introuvable" });
+      return res.status(404).json({ message: 'Projet non trouvé' });
     }
 
-    const isMember =
-      project.owner.toString() === req.userId ||
-      project.admins.some((admin) => admin.toString() === req.userId) ||
-      project.teamMembers.some((member) => member.toString() === req.userId);
+    const isMember = project.members.some((member) => {
+      const memberId = member.user?._id || member.user;
+      return memberId && memberId.toString() === userId.toString();
+    });
 
     if (!isMember) {
-      return res.status(403).json({ message: "Vous n'êtes pas membre de ce projet" });
+      return res.status(403).json({ message: 'Accès refusé' });
     }
 
-    req.project = project;
-    next();
+    const ticket = new Ticket({
+      title,
+      description,
+      estimationDate,
+      project: projectId,
+      createdBy: userId,
+      assignees: assignees || [],
+      labels: labels || [],
+    });
+
+    await ticket.save();
+
+    // Populate toutes les références
+    await ticket.populate([
+      { path: 'createdBy', select: 'firstName lastName email' },
+      { path: 'assignees', select: 'firstName lastName email' },
+      { path: 'labels' },
+    ]);
+
+    console.log('Ticket created successfully:', ticket._id);
+    res.status(201).json(ticket);
   } catch (error) {
-    console.error("Erreur vérification membre:", error);
-    res.status(500).json({ message: "Erreur serveur" });
-  }
-};
-
-// GET /api/tickets/project/:projectId (tous les tickets d'un projet)
-router.get("/project/:projectId", authMiddleware, async (req, res) => {
-  try {
-    const { projectId } = req.params;
-
-    const project = await Project.findById(projectId);
-
-    if (!project) {
-      return res.status(404).json({ message: "Projet introuvable" });
-    }
-
-    const isMember =
-      project.owner.toString() === req.userId ||
-      project.admins.some((admin) => admin.toString() === req.userId) ||
-      project.teamMembers.some((member) => member.toString() === req.userId);
-
-    if (!isMember) {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-
-    const tickets = await Ticket.find({ project: projectId })
-      .populate("assignees", "firstName lastName email")
-      .populate("createdBy", "firstName lastName email")
-      .populate("project", "title")
-      .sort({ createdAt: -1 });
-
-    res.json(tickets);
-  } catch (error) {
-    console.error("Erreur liste tickets:", error);
-    res.status(500).json({ message: "Erreur serveur" });
+    console.error('Erreur création ticket:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur',
+      error: error.message 
+    });
   }
 });
 
-// GET /api/tickets/:id (détails d'un ticket)
-router.get("/:id", authMiddleware, async (req, res) => {
+// Récupérer les tickets d'un projet
+router.get('/project/:projectId', async (req, res) => {
   try {
-    const ticket = await Ticket.findById(req.params.id)
-      .populate("project")
-      .populate("assignees", "firstName lastName email")
-      .populate("createdBy", "firstName lastName email");
+    const { projectId } = req.params;
+    const userId = req.userId;
 
-    if (!ticket) {
-      return res.status(404).json({ message: "Ticket introuvable" });
+    console.log('Get tickets request:', { projectId, userId });
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
     }
 
-    const project = await Project.findById(ticket.project._id);
-    const isMember =
-      project.owner.toString() === req.userId ||
-      project.admins.some((admin) => admin.toString() === req.userId) ||
-      project.teamMembers.some((member) => member.toString() === req.userId);
+    // Vérifier que le projet existe et que l'utilisateur y a accès
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return res.status(404).json({ message: 'Projet non trouvé' });
+    }
+
+    const isMember = project.members.some((member) => {
+      const memberId = member.user?._id || member.user;
+      return memberId && memberId.toString() === userId.toString();
+    });
 
     if (!isMember) {
-      return res.status(403).json({ message: "Accès refusé" });
+      return res.status(403).json({ message: 'Accès refusé' });
+    }
+
+    const tickets = await Ticket.find({ project: projectId })
+      .populate('createdBy', 'firstName lastName email')
+      .populate('assignees', 'firstName lastName email')
+      .populate('labels')
+      .sort({ createdAt: -1 });
+
+    console.log('Tickets found:', tickets.length);
+    res.json(tickets);
+  } catch (error) {
+    console.error('Erreur liste tickets:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur',
+      error: error.message 
+    });
+  }
+});
+
+// Récupérer un ticket par ID
+router.get('/:ticketId', async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const userId = req.userId;
+
+    console.log('Get ticket by ID request:', { ticketId, userId });
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    }
+
+    const ticket = await Ticket.findById(ticketId)
+      .populate('createdBy', 'firstName lastName email')
+      .populate('assignees', 'firstName lastName email')
+      .populate('project', 'title description')
+      .populate('labels');
+
+    if (!ticket) {
+      return res.status(404).json({ message: 'Ticket non trouvé' });
+    }
+
+    // Vérifier que l'utilisateur est membre du projet
+    const project = await Project.findById(ticket.project._id);
+    const isMember = project.members.some((member) => {
+      const memberId = member.user?._id || member.user;
+      return memberId && memberId.toString() === userId.toString();
+    });
+
+    if (!isMember) {
+      return res.status(403).json({ message: 'Accès refusé' });
     }
 
     res.json(ticket);
   } catch (error) {
-    console.error("Erreur détails ticket:", error);
-    res.status(500).json({ message: "Erreur serveur" });
+    console.error('Erreur récupération ticket:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur',
+      error: error.message 
+    });
   }
 });
 
-// POST /api/tickets (créer un ticket)
-router.post("/", authMiddleware, checkProjectMember, async (req, res) => {
+// Mettre à jour un ticket
+router.put('/:ticketId', async (req, res) => {
   try {
-    const { project, title, description, estimationDate, assignees } = req.body;
+    const { ticketId } = req.params;
+    const { title, description, estimationDate, status, assignees, labels } = req.body;
+    const userId = req.userId;
 
-    if (!title || !estimationDate) {
-      return res.status(400).json({ message: "title et estimationDate requis" });
+    console.log('Update ticket request:', { ticketId, userId });
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
     }
 
-    const ticket = await Ticket.create({
-      project,
-      title,
-      description: description || "",
-      estimationDate,
-      assignees: assignees || [],
-      createdBy: req.userId,
+    const ticket = await Ticket.findById(ticketId);
+    if (!ticket) {
+      return res.status(404).json({ message: 'Ticket non trouvé' });
+    }
+
+    // Vérifier que l'utilisateur est membre du projet
+    const project = await Project.findById(ticket.project);
+    const isMember = project.members.some((member) => {
+      const memberId = member.user?._id || member.user;
+      return memberId && memberId.toString() === userId.toString();
     });
 
-    const populatedTicket = await Ticket.findById(ticket._id)
-      .populate("assignees", "firstName lastName email")
-      .populate("createdBy", "firstName lastName email")
-      .populate("project", "title");
-
-    res.status(201).json({ message: "Ticket créé", ticket: populatedTicket });
-  } catch (error) {
-    console.error("Erreur création ticket:", error);
-    res.status(500).json({ message: "Erreur serveur" });
-  }
-});
-
-// PATCH /api/tickets/:id (mettre à jour un ticket)
-router.patch("/:id", authMiddleware, async (req, res) => {
-  try {
-    const { title, description, status, estimationDate, assignees } = req.body;
-
-    const ticket = await Ticket.findById(req.params.id);
-
-    if (!ticket) {
-      return res.status(404).json({ message: "Ticket introuvable" });
-    }
-
-    const project = await Project.findById(ticket.project);
-    const isMember =
-      project.owner.toString() === req.userId ||
-      project.admins.some((admin) => admin.toString() === req.userId) ||
-      project.teamMembers.some((member) => member.toString() === req.userId);
-
     if (!isMember) {
-      return res.status(403).json({ message: "Accès refusé" });
+      return res.status(403).json({ message: 'Accès refusé' });
     }
 
-    // Mise à jour
-    if (title) ticket.title = title;
+    // Mettre à jour les champs
+    if (title !== undefined) ticket.title = title;
     if (description !== undefined) ticket.description = description;
-    if (status) ticket.status = status;
-    if (estimationDate) ticket.estimationDate = estimationDate;
-    if (assignees !== undefined) ticket.assignees = assignees; // ← Important pour les assignés
+    if (estimationDate !== undefined) ticket.estimationDate = estimationDate;
+    if (status !== undefined) ticket.status = status;
+    if (assignees !== undefined) ticket.assignees = assignees;
+    if (labels !== undefined) ticket.labels = labels;
 
     await ticket.save();
 
-    const updatedTicket = await Ticket.findById(ticket._id)
-      .populate("assignees", "firstName lastName email")
-      .populate("createdBy", "firstName lastName email")
-      .populate("project", "title");
+    // Populate toutes les références
+    await ticket.populate([
+      { path: 'createdBy', select: 'firstName lastName email' },
+      { path: 'assignees', select: 'firstName lastName email' },
+      { path: 'project', select: 'title' },
+      { path: 'labels' },
+    ]);
 
-    res.json({ message: "Ticket mis à jour", ticket: updatedTicket });
+    console.log('Ticket updated successfully');
+    res.json(ticket);
   } catch (error) {
-    console.error("Erreur modification ticket:", error);
-    res.status(500).json({ message: "Erreur serveur" });
+    console.error('Erreur mise à jour ticket:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur',
+      error: error.message 
+    });
   }
 });
 
-// DELETE /api/tickets/:id (supprimer un ticket - seulement createdBy)
-router.delete("/:id", authMiddleware, async (req, res) => {
+// Supprimer un ticket
+router.delete('/:ticketId', async (req, res) => {
   try {
-    const ticket = await Ticket.findById(req.params.id);
+    const { ticketId } = req.params;
+    const userId = req.userId;
 
+    console.log('Delete ticket request:', { ticketId, userId });
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié' });
+    }
+
+    const ticket = await Ticket.findById(ticketId);
     if (!ticket) {
-      return res.status(404).json({ message: "Ticket introuvable" });
+      return res.status(404).json({ message: 'Ticket non trouvé' });
     }
 
-    if (ticket.createdBy.toString() !== req.userId) {
-      return res.status(403).json({ message: "Seul le créateur peut supprimer ce ticket" });
+    // Vérifier que l'utilisateur est membre du projet
+    const project = await Project.findById(ticket.project);
+    const isMember = project.members.some((member) => {
+      const memberId = member.user?._id || member.user;
+      return memberId && memberId.toString() === userId.toString();
+    });
+
+    if (!isMember) {
+      return res.status(403).json({ message: 'Accès refusé' });
     }
 
-    await Ticket.findByIdAndDelete(req.params.id);
+    // Supprimer aussi les commentaires associés
+    const Comment = require('../models/Comment.model');
+    await Comment.deleteMany({ ticket: ticketId });
 
-    res.json({ message: "Ticket supprimé" });
+    await Ticket.findByIdAndDelete(ticketId);
+
+    console.log('Ticket deleted successfully');
+    res.json({ message: 'Ticket supprimé avec succès' });
   } catch (error) {
-    console.error("Erreur suppression ticket:", error);
-    res.status(500).json({ message: "Erreur serveur" });
+    console.error('Erreur suppression ticket:', error);
+    res.status(500).json({ 
+      message: 'Erreur serveur',
+      error: error.message 
+    });
   }
 });
 
